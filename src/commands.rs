@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -16,7 +15,19 @@ pub fn list(connection: &mut TcpStream) {
     send_json_to_server(connection, data);
     let json = receive_json_from_server(connection);
 
-    println!("{}", json)
+    let value: Value = serde_json::from_str(&*json).expect("");
+    
+    if let Some(files_list) = value.get("files_list") {
+        if let Some(files) = files_list.as_array() {
+            println!("Arquivos no servidor: ");
+            println!("|-- src");
+            for file in files {
+                if let Some(file_name) = file.as_str() {
+                    println!("    |-- {}", file_name);
+                }
+            }
+        }
+    }
 }
 
 pub fn put(connection: &mut TcpStream, file_path: &str, file_name: &str) {
@@ -34,9 +45,21 @@ pub fn put(connection: &mut TcpStream, file_path: &str, file_name: &str) {
                 send_json_to_server(connection, data);
                 send_file_to_server(connection, file_path);
 
+                println!("Inserido com sucesso");
+
                 let json = receive_json_from_server(connection);
 
-                println!("{}", json)
+                let value: Value = serde_json::from_str(&*json).expect("");
+
+
+                if let Some(status) = value.get("status") {
+                    if status != "success" { 
+                        println!("Arquivo com erro (nao inserido)");
+                        return;
+                    }
+                    
+                    println!("Arquivo inserido com sucesso")
+                }
             }
             Err(e) => {
                 println!("Erro ao ler o arquivo: {}", e);
@@ -61,7 +84,12 @@ pub fn get(connection: &mut TcpStream, file_name: &str) {
     let output_path = Path::new(&new_file_path);
     fs::write(output_path, file_bytes).expect("falha");
 
-    println!("{}", json)
+    let value: Value = serde_json::from_str(&*json).expect("");
+
+    if let Some(file) = value.get("file_name") {
+            println!("|-- src");
+            println!("    |-- [+] {}", file.to_string());
+    }
 }
 
 fn send_json_to_server(connection: &mut TcpStream, data: Value) {
@@ -95,7 +123,7 @@ fn send_file_to_server(connection: &mut TcpStream, file_path: &str) {
 
 fn receive_json_from_server(connection: &mut TcpStream) -> String {
     let mut buffer = [0; 8];
-    connection.read_exact(&mut buffer).expect("");
+    connection.read(&mut buffer).expect("");
     let json_size = u64::from_le_bytes(buffer);
 
     let mut json_buffer = vec![0; json_size as usize];
@@ -107,7 +135,7 @@ fn receive_json_from_server(connection: &mut TcpStream) -> String {
 
 fn receive_file_from_server(connection: &mut TcpStream) -> Vec<u8> {
     let mut buffer = [0; 8];
-    connection.read_exact(&mut buffer).expect("");
+    connection.read(&mut buffer).expect("");
     let file_size = u64::from_le_bytes(buffer);
 
     let mut file_buffer = vec![0; file_size as usize];
