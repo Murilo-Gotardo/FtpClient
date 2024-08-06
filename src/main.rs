@@ -1,11 +1,24 @@
+use std::any::Any;
 use std::io;
-use std::net::{Shutdown, TcpStream};
+use std::net::{IpAddr, Shutdown, TcpStream};
 use std::path::Path;
 
 mod commands;
 
 fn main() -> io::Result<()> {
-    let mut connection = TcpStream::connect("192.168.0.4:11000")
+    let mut ip_input = String::new();
+    println!("Digite o ip e porta do servidor");
+
+    loop {
+        io::stdin().read_line(&mut ip_input).expect("falha ao ler diretorio");
+
+        if validate_ip_and_port(ip_input.trim().to_owned().as_str()) { break }
+
+        ip_input = String::new();
+        println!("IP invalido, tente novamente");
+    }
+
+    let mut connection = TcpStream::connect(ip_input.trim())
         .expect("Falha ao conectar com o servidor");
 
     let mut op: i8 = 1;
@@ -17,10 +30,27 @@ fn main() -> io::Result<()> {
         3 - get\n
         0 - sair");
         
-        io::stdin().read_line(&mut input).expect("falha ao ler diretorio");
-        op = input.trim().parse().expect("Por favor, insira um número válido");
+        loop {
+            io::stdin().read_line(&mut input).expect("falha ao ler diretorio");
+            
+            op = match input.trim().parse() {
+                Ok(num) => {
+                    num
+                } Err(..) => {
+                    println!("Numero invalido, digite novamente");
+                    5
+                }
+            };
+            
+            let value = &op as &dyn Any;
+            
+            if let Some(_) = value.downcast_ref::<i8>() {  
+                break
+            }
+        }
         
         match op {
+            0 => break,
             1 => commands::list(&mut connection),
             2 => {
                 println!("Forneça o diretório do arquivo");
@@ -35,7 +65,7 @@ fn main() -> io::Result<()> {
                 io::stdin().read_line(&mut file_name_input).expect("Falha ao ler diretório");
                 commands::get(&mut connection, file_name_input.trim());
             },
-            _ => println!("Valor inválido"),
+            _ => (),
         }
 
         input.clear()
@@ -43,5 +73,30 @@ fn main() -> io::Result<()> {
 
     connection.shutdown(Shutdown::Both)?;
     Ok(())
+}
+
+fn is_valid_ip(ip: &str) -> bool {
+    match ip.parse::<IpAddr>() {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+fn is_valid_port(port: u16) -> bool {
+    (0..=65535).contains(&port)
+}
+
+fn validate_ip_and_port(ip_and_port: &str) -> bool {
+    if let Some((ip, port_str)) = ip_and_port.split_once(':') {
+        if !is_valid_ip(ip) {
+            return false;
+        }
+
+        if let Ok(port) = port_str.parse::<u16>() {
+            return is_valid_port(port);
+        }
+    }
+
+    false
 }
 

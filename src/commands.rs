@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, io};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -11,21 +11,26 @@ pub fn list(connection: &mut TcpStream) {
     let data = json!({
         "command": "list",
     });
-
-    send_json_to_server(connection, data);
-    let json = receive_json_from_server(connection);
-
-    let value: Value = serde_json::from_str(&*json).expect("");
     
-    if let Some(files_list) = value.get("files_list") {
-        if let Some(files) = files_list.as_array() {
-            println!("Arquivos no servidor: ");
-            println!("|-- src");
-            for file in files {
-                if let Some(file_name) = file.as_str() {
-                    println!("    |-- {}", file_name);
+    match send_json_to_server(connection, data) { 
+        Ok(..) => {
+            let json = receive_json_from_server(connection);
+
+            let value: Value = serde_json::from_str(&*json).expect("");
+
+            if let Some(files_list) = value.get("files_list") {
+                if let Some(files) = files_list.as_array() {
+                    println!("Arquivos no servidor: ");
+                    println!("|-- src");
+                    for file in files {
+                        if let Some(file_name) = file.as_str() {
+                            println!("    |-- {}", file_name);
+                        }
+                    }
                 }
             }
+        } Err(e) => {
+            println!("Conexao perdida")
         }
     }
 }
@@ -42,23 +47,22 @@ pub fn put(connection: &mut TcpStream, file_path: &str, file_name: &str) {
                     "hash" : local_hash
                 });
 
-                send_json_to_server(connection, data);
-                send_file_to_server(connection, file_path);
+                match send_json_to_server(connection, data) {
+                    Ok(_) => {
+                        send_file_to_server(connection, file_path);
 
-                println!("Inserido com sucesso");
+                        let json = receive_json_from_server(connection);
+                        let value: Value = serde_json::from_str(&*json).expect("");
 
-                let json = receive_json_from_server(connection);
+                        if let Some(status) = value.get("status") {
+                            if status != "success" {
+                                println!("Arquivo com erro (nao inserido)");
+                                return;
+                            }
 
-                let value: Value = serde_json::from_str(&*json).expect("");
-
-
-                if let Some(status) = value.get("status") {
-                    if status != "success" { 
-                        println!("Arquivo com erro (nao inserido)");
-                        return;
-                    }
-                    
-                    println!("Arquivo inserido com sucesso")
+                            println!("Arquivo inserido com sucesso")
+                        }
+                    } Err(_) => println!("Conexao perdida")
                 }
             }
             Err(e) => {
@@ -75,30 +79,47 @@ pub fn get(connection: &mut TcpStream, file_name: &str) {
         "file_name": file_name.trim(),
         "command": "get",
     });
+    
+    match send_json_to_server(connection, data) { 
+        Ok(_) => {
+            let json = receive_json_from_server(connection);
+            let file_bytes = receive_file_from_server(connection);
 
-    send_json_to_server(connection, data);
-    let json = receive_json_from_server(connection);
-    let file_bytes = receive_file_from_server(connection);
+            match fs::create_dir_all(FILES.to_owned()) {
+                Ok(_) => {
+                    let new_file_path = format!("{}{}{}", FILES.to_owned(), "/", file_name);
+                    let output_path = Path::new(&new_file_path);
+                    fs::write(output_path, file_bytes).expect("falha");
 
-    let new_file_path = format!("{}{}{}", FILES.to_owned(), "/", file_name);
-    let output_path = Path::new(&new_file_path);
-    fs::write(output_path, file_bytes).expect("falha");
+                    let value: Value = serde_json::from_str(&*json).expect("");
 
-    let value: Value = serde_json::from_str(&*json).expect("");
+                    if let Some(file) = value.get("file_name") {
+                        println!("|-- src");
+                        println!("    |-- [+] {}", file.to_string());
+                    }
 
-    if let Some(file) = value.get("file_name") {
-            println!("|-- src");
-            println!("    |-- [+] {}", file.to_string());
+                } Err(_) => println!("nao foi possivel criar o caminho")
+            }
+        } Err(_) => println!("Conexao perdida")
     }
 }
 
-fn send_json_to_server(connection: &mut TcpStream, data: Value) {
+fn send_json_to_server(connection: &mut TcpStream, data: Value) -> io::Result<()>{
     let json_string = serde_json::to_string(&data).expect("Falha ao serializar JSON");
     let metadata = json_string.len() as u64;
     let bytes = json_string.as_bytes();
-
-    connection.write_all(&metadata.to_le_bytes()).expect("TODO: panic message");
-    connection.write_all(bytes).unwrap();
+    
+    match connection.write_all(&metadata.to_le_bytes()) {  
+        Ok(..) => match connection.write_all(bytes) { 
+            Ok(()) => { Ok(()) }
+            Err(e) => {
+                Err(e)
+            }
+        },
+        Err(e) => {
+            Err(e)
+        }
+    }
 }
 
 fn send_file_to_server(connection: &mut TcpStream, file_path: &str) {
